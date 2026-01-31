@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Woody's Wild Guess - LIRR Estimator</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, sans-serif;
+        padding: 20px;
+        background: linear-gradient(135deg, #1e3a5f 0%, #0d1b2a 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .container {
+        background: white;
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+        max-width: 600px;
+        width: 100%;
+        max-height: 90vh;
+        overflow-y: auto;
+      }
+
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 20px;
+        padding-bottom: 16px;
+        border-bottom: 2px solid #e5e7eb;
+      }
+
+      .logos {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .logo {
+        width: 80px;
+        height: 80px;
+        border-radius: 12px;
+        object-fit: cover;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      }
+
+      .lirr-logo {
+        width: 80px;
+        height: 80px;
+        object-fit: contain;
+      }
+
+      .header-text h1 {
+        font-size: 22px;
+        color: #1e3a5f;
+        margin-bottom: 4px;
+      }
+
+      .header-text p {
+        font-size: 13px;
+        color: #6b7280;
+      }
+
+      .lirr-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, #0039a6 0%, #002868 100%);
+        color: white;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-top: 6px;
+      }
+
+      .woody-quote {
+        background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+        border-left: 4px solid #f59e0b;
+        padding: 12px 16px;
+        border-radius: 0 8px 8px 0;
+        margin-bottom: 20px;
+        font-style: italic;
+        color: #92400e;
+        font-size: 14px;
+      }
+
+      .search-section {
+        margin-bottom: 20px;
+      }
+
+      .search-label {
+        display: block;
+        font-size: 14px;
+        font-weight: 600;
+        color: #374151;
+        margin-bottom: 8px;
+      }
+
+      .search-wrapper {
+        display: flex;
+        gap: 10px;
+      }
+
+      input[type="text"] {
+        flex: 1;
+        padding: 12px 16px;
+        border: 2px solid #e5e7eb;
+        border-radius: 8px;
+        font-size: 14px;
+        transition: border-color 0.2s ease;
+      }
+
+      input[type="text"]:focus {
+        outline: none;
+        border-color: #0039a6;
+      }
+
+      select {
+        padding: 12px 16px;
+        border: 2px solid #e5e7eb;
+        border-radius: 8px;
+        font-size: 14px;
+        background: white;
+        cursor: pointer;
+        min-width: 140px;
+      }
+
+      select:focus {
+        outline: none;
+        border-color: #0039a6;
+      }
+
+      .projects-list {
+        max-height: 200px;
+        overflow-y: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        display: none;
+      }
+
+      .projects-list.show {
+        display: block;
+      }
+
+      .project-item {
+        padding: 12px 16px;
+        border-bottom: 1px solid #e5e7eb;
+        cursor: pointer;
+        transition: background 0.2s ease;
+      }
+
+      .project-item:last-child {
+        border-bottom: none;
+      }
+
+      .project-item:hover {
+        background: #f3f4f6;
+      }
+
+      .project-item.selected {
+        background: #dbeafe;
+        border-left: 3px solid #0039a6;
+      }
+
+      .project-name {
+        font-weight: 600;
+        color: #1f2937;
+        font-size: 14px;
+      }
+
+      .project-meta {
+        font-size: 12px;
+        color: #6b7280;
+        margin-top: 4px;
+      }
+
+      .project-status {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+
+      .status-completed {
+        background: #d1fae5;
+        color: #065f46;
+      }
+
+      .status-in-progress {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+
+      .status-planned {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .status-under-study {
+        background: #e5e7eb;
+        color: #374151;
+      }
+
+      .estimate-section {
+        background: #f9fafb;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+        display: none;
+      }
+
+      .estimate-section.show {
+        display: block;
+      }
+
+      .estimate-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+
+      .estimate-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #1f2937;
+      }
+
+      .confidence-badge {
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .confidence-high {
+        background: #d1fae5;
+        color: #065f46;
+      }
+
+      .confidence-moderate {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+
+      .confidence-low {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .confidence-speculative {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .estimate-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .estimate-card {
+        background: white;
+        padding: 14px;
+        border-radius: 8px;
+        text-align: center;
+        border: 1px solid #e5e7eb;
+      }
+
+      .estimate-card.woody-special {
+        grid-column: span 2;
+        background: linear-gradient(135deg, #0039a6 0%, #1e3a5f 100%);
+        color: white;
+        border: none;
+      }
+
+      .estimate-label {
+        font-size: 11px;
+        color: #6b7280;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        font-weight: 600;
+      }
+
+      .woody-special .estimate-label {
+        color: #93c5fd;
+      }
+
+      .estimate-value {
+        font-size: 20px;
+        font-weight: 700;
+        color: #1f2937;
+      }
+
+      .woody-special .estimate-value {
+        color: white;
+        font-size: 26px;
+      }
+
+      .estimate-unit {
+        font-size: 12px;
+        color: #6b7280;
+      }
+
+      .woody-special .estimate-unit {
+        color: #93c5fd;
+      }
+
+      .project-details {
+        background: white;
+        border-radius: 8px;
+        padding: 14px;
+        margin-top: 16px;
+        border: 1px solid #e5e7eb;
+      }
+
+      .detail-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #f3f4f6;
+        font-size: 13px;
+      }
+
+      .detail-row:last-child {
+        border-bottom: none;
+      }
+
+      .detail-label {
+        color: #6b7280;
+        font-weight: 500;
+      }
+
+      .detail-value {
+        color: #1f2937;
+        font-weight: 600;
+      }
+
+      .components-list {
+        margin-top: 12px;
+      }
+
+      .components-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: #374151;
+        margin-bottom: 8px;
+      }
+
+      .component-tag {
+        display: inline-block;
+        background: #e5e7eb;
+        color: #374151;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        margin: 2px;
+      }
+
+      .button-group {
+        display: flex;
+        gap: 12px;
+      }
+
+      button {
+        flex: 1;
+        padding: 14px 20px;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .primary-btn {
+        background: linear-gradient(135deg, #0039a6 0%, #002868 100%);
+        color: white;
+      }
+
+      .primary-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 57, 166, 0.4);
+      }
+
+      .secondary-btn {
+        background: #f3f4f6;
+        color: #374151;
+      }
+
+      .secondary-btn:hover {
+        background: #e5e7eb;
+      }
+
+      .toast {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: #0039a6;
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        opacity: 0;
+        transform: translateY(20px);
+        transition: all 0.3s ease;
+        z-index: 1000;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .no-results {
+        padding: 20px;
+        text-align: center;
+        color: #6b7280;
+        font-size: 14px;
+      }
+
+      .filter-row {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+      }
+
+      .filter-btn {
+        flex: none;
+        padding: 8px 14px;
+        font-size: 12px;
+        background: #f3f4f6;
+        border: 1px solid #e5e7eb;
+        border-radius: 20px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .filter-btn:hover {
+        background: #e5e7eb;
+      }
+
+      .filter-btn.active {
+        background: #0039a6;
+        color: white;
+        border-color: #0039a6;
+      }
+
+      @media (max-width: 480px) {
+        .container {
+          padding: 16px;
+        }
+
+        .header {
+          flex-direction: column;
+          text-align: center;
+        }
+
+        .estimate-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .estimate-card.woody-special {
+          grid-column: span 1;
+        }
+
+        .filter-row {
+          justify-content: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div class="logos">
+          <img
+            src="https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/MTA_Long_Island_Rail_Road_Logo.svg/200px-MTA_Long_Island_Rail_Road_Logo.svg.png"
+            alt="LIRR Logo"
+            class="lirr-logo"
+            onerror="console.error('LIRR logo failed to load'); this.style.display='none';"
+          />
+          <img
+            src="/img/woody-logo.png"
+            alt="Woody's Wild Guess Logo"
+            class="logo"
+            onerror="this.style.display='none'"
+          />
+        </div>
+        <div class="header-text">
+          <h1>Woody's Wild Guess</h1>
+          <p>LIRR Capital Project Estimator</p>
+          <span class="lirr-badge">Long Island Rail Road</span>
+        </div>
+      </div>
+
+      <div class="woody-quote" id="woodyQuote">
+        Time to make some educated guesses! Well, VERY educated guesses.
+      </div>
+
+      <div class="search-section">
+        <label class="search-label">Search LIRR Capital Projects</label>
+        <div class="search-wrapper">
+          <input
+            type="text"
+            id="searchInput"
+            placeholder="Search by name, location, or category..."
+          />
+        </div>
+      </div>
+
+      <div class="filter-row">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="completed">Completed</button>
+        <button class="filter-btn" data-filter="in-progress">In Progress</button>
+        <button class="filter-btn" data-filter="planned">Planned</button>
+        <button class="filter-btn" data-filter="under-study">Under Study</button>
+      </div>
+
+      <div class="projects-list show" id="projectsList">
+        <!-- Projects will be populated by JavaScript -->
+      </div>
+
+      <div class="estimate-section" id="estimateSection">
+        <div class="estimate-header">
+          <span class="estimate-title" id="estimateTitle">Project Estimate</span>
+          <span class="confidence-badge" id="confidenceBadge">Moderate Confidence</span>
+        </div>
+
+        <div class="estimate-grid">
+          <div class="estimate-card">
+            <div class="estimate-label">Low Estimate</div>
+            <div class="estimate-value" id="lowEstimate">$0</div>
+            <div class="estimate-unit">million</div>
+          </div>
+          <div class="estimate-card">
+            <div class="estimate-label">High Estimate</div>
+            <div class="estimate-value" id="highEstimate">$0</div>
+            <div class="estimate-unit">million</div>
+          </div>
+          <div class="estimate-card woody-special">
+            <div class="estimate-label">Woody's Wild Guess</div>
+            <div class="estimate-value" id="woodyGuess">$0</div>
+            <div class="estimate-unit">million</div>
+          </div>
+        </div>
+
+        <div class="project-details" id="projectDetails">
+          <div class="detail-row">
+            <span class="detail-label">Category</span>
+            <span class="detail-value" id="detailCategory">-</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Location</span>
+            <span class="detail-value" id="detailLocation">-</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Timeline</span>
+            <span class="detail-value" id="detailTimeline">-</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Original Estimate</span>
+            <span class="detail-value" id="detailEstimatedCost">-</span>
+          </div>
+          <div class="detail-row" id="actualCostRow" style="display: none;">
+            <span class="detail-label">Actual Final Cost</span>
+            <span class="detail-value" id="detailActualCost">-</span>
+          </div>
+          <div class="detail-row" id="varianceRow" style="display: none;">
+            <span class="detail-label">Cost Variance</span>
+            <span class="detail-value" id="detailVariance">-</span>
+          </div>
+          <div class="components-list">
+            <div class="components-title">Key Components</div>
+            <div id="componentTags"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="button-group">
+        <button class="secondary-btn" id="newQuoteBtn">New Quote</button>
+        <button class="primary-btn" id="selectBtn">Send Estimate</button>
+      </div>
+    </div>
+
+    <div class="toast" id="toast">Estimate sent!</div>
+
+    <script type="module" src="/src/mcp-app.ts"></script>
+  </body>
+</html>
