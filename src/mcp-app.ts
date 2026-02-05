@@ -9,6 +9,24 @@ import {
   estimationFactors,
 } from "./lirr-projects";
 import woodyLogoUrl from "./assets/woody-logo.png";
+import {
+  login,
+  logout,
+  isAuthenticated,
+  hasAuthCallback,
+  handleCallback,
+  getUser,
+} from "./auth";
+
+// Auth DOM elements
+const loginScreen = document.getElementById("loginScreen") as HTMLDivElement;
+const loadingScreen = document.getElementById("loadingScreen") as HTMLDivElement;
+const appContainer = document.getElementById("appContainer") as HTMLDivElement;
+const loginBtn = document.getElementById("loginBtn") as HTMLButtonElement;
+const logoutBtn = document.getElementById("logoutBtn") as HTMLButtonElement;
+const userNameEl = document.getElementById("userName") as HTMLDivElement;
+const userEmailEl = document.getElementById("userEmail") as HTMLDivElement;
+const loginWoodyLogo = document.getElementById("loginWoodyLogo") as HTMLImageElement;
 
 // DOM elements
 const woodyQuoteEl = document.getElementById("woodyQuote") as HTMLDivElement;
@@ -329,13 +347,46 @@ ${selectedProject.description}
   });
 });
 
-// Initialize app
-async function initialize() {
+// Show/hide screens
+function showLoginScreen() {
+  loginScreen.classList.remove("hidden");
+  loadingScreen.classList.add("hidden");
+  appContainer.classList.add("hidden");
+}
+
+function showLoadingScreen() {
+  loginScreen.classList.add("hidden");
+  loadingScreen.classList.remove("hidden");
+  appContainer.classList.add("hidden");
+}
+
+function showAppScreen() {
+  loginScreen.classList.add("hidden");
+  loadingScreen.classList.add("hidden");
+  appContainer.classList.remove("hidden");
+}
+
+// Update user info display
+function updateUserDisplay() {
+  const user = getUser();
+  if (user) {
+    userNameEl.textContent = user.name || user.given_name || "User";
+    userEmailEl.textContent = user.email || "";
+  }
+}
+
+// Initialize the main app functionality
+async function initializeMainApp() {
   // Set the Woody logo src to the imported asset
-  const woodyLogoImg = document.querySelector('img[alt="Woody\'s Wild Guess Logo"]') as HTMLImageElement;
+  const woodyLogoImg = document.querySelector(
+    '#appContainer img[alt="Woody\'s Wild Guess Logo"]'
+  ) as HTMLImageElement;
   if (woodyLogoImg) {
     woodyLogoImg.src = woodyLogoUrl;
   }
+
+  // Update user display
+  updateUserDisplay();
 
   // Connect to the host
   await app.connect();
@@ -366,8 +417,54 @@ async function initialize() {
 
   // Render all projects initially
   renderProjects(lirrProjects);
+
+  // Show the app
+  showAppScreen();
+}
+
+// Initialize auth flow
+async function initialize() {
+  // Set Woody logo on login screen
+  if (loginWoodyLogo) {
+    loginWoodyLogo.src = woodyLogoUrl;
+  }
+
+  // Wire up login button
+  loginBtn.addEventListener("click", () => {
+    loginBtn.disabled = true;
+    loginBtn.textContent = "Redirecting...";
+    login();
+  });
+
+  // Wire up logout button
+  logoutBtn.addEventListener("click", () => {
+    logout();
+  });
+
+  // Check if this is an auth callback
+  if (hasAuthCallback()) {
+    showLoadingScreen();
+    const success = await handleCallback();
+    if (success) {
+      await initializeMainApp();
+    } else {
+      showLoginScreen();
+    }
+    return;
+  }
+
+  // Check if already authenticated
+  if (isAuthenticated()) {
+    showLoadingScreen();
+    await initializeMainApp();
+    return;
+  }
+
+  // Show login screen
+  showLoginScreen();
 }
 
 initialize().catch((err) => {
   console.error("Failed to initialize app:", err);
+  showLoginScreen();
 });

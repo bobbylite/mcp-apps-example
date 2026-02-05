@@ -81,6 +81,19 @@ const expressApp = express();
 expressApp.use(cors());
 expressApp.use(express.json());
 
+// Serve the app HTML for browser access (for auth flow testing)
+expressApp.get("/", async (_req, res) => {
+  try {
+    const html = await fs.readFile(
+      path.join(import.meta.dirname, "dist", "mcp-app.html"),
+      "utf-8"
+    );
+    res.type("html").send(html);
+  } catch (err) {
+    res.status(500).send("Error loading app. Did you run 'npm run build' first?");
+  }
+});
+
 expressApp.post("/mcp", async (req, res) => {
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -97,6 +110,7 @@ expressApp.listen(PORT, (err?: Error) => {
     console.error("Error starting server:", err);
     process.exit(1);
   }
-  console.log(`Server listening on http://localhost:${PORT}/mcp`);
-  console.log("Use this URL to add as a custom connector in Claude.");
+  console.log(`Server listening on http://localhost:${PORT}`);
+  console.log(`  - Browser: http://localhost:${PORT}/`);
+  console.log(`  - MCP endpoint: http://localhost:${PORT}/mcp`);
 });
