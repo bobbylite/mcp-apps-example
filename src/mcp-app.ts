@@ -388,29 +388,32 @@ async function initializeMainApp() {
   // Update user display
   updateUserDisplay();
 
-  // Connect to the host
-  await app.connect();
+  // Try to connect to the MCP host (may fail in standalone browser mode)
+  try {
+    await app.connect();
+    console.log("Woody's Wild Guess app connected!");
 
-  console.log("Woody's Wild Guess app connected!");
+    // Handle initial tool result from the server (only when connected to MCP)
+    app.ontoolresult = (result) => {
+      console.log("Received tool result:", result);
 
-  // Handle initial tool result from the server
-  app.ontoolresult = (result) => {
-    console.log("Received tool result:", result);
-
-    // Check if there's a project query in the initial request
-    const text = result.content?.find((c) => c.type === "text")?.text;
-    if (text) {
-      // Try to find a matching project from the query
-      const query = text.toLowerCase();
-      const matchingProjects = searchProjects(query);
-      if (matchingProjects.length > 0) {
-        // Auto-select the first matching project
-        selectProject(matchingProjects[0]);
-        searchInput.value = query;
-        renderProjects(matchingProjects);
+      // Check if there's a project query in the initial request
+      const text = result.content?.find((c) => c.type === "text")?.text;
+      if (text) {
+        // Try to find a matching project from the query
+        const query = text.toLowerCase();
+        const matchingProjects = searchProjects(query);
+        if (matchingProjects.length > 0) {
+          // Auto-select the first matching project
+          selectProject(matchingProjects[0]);
+          searchInput.value = query;
+          renderProjects(matchingProjects);
+        }
       }
-    }
-  };
+    };
+  } catch (err) {
+    console.log("Running in standalone browser mode (no MCP host)");
+  }
 
   // Set initial Woody quote
   woodyQuoteEl.textContent = getRandomWoodyQuote();
