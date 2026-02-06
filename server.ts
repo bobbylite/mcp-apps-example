@@ -1,6 +1,7 @@
 // server.ts
 console.log("Starting Woody's Wild Guess MCP App server...");
 
+import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -13,12 +14,29 @@ import cors from "cors";
 import express from "express";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { discovery, type Configuration } from "openid-client";
+import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import { MCPOAuthProvider } from "./src/mcp-oauth-provider.js";
 import {
   getSession,
   saveSession,
   clearSession,
   type AuthSession,
 } from "./src/session-store.js";
+
+// OIDC Configuration - Update these with your OIDC provider details
+const OIDC_CONFIG = {
+  clientId: process.env.OIDC_CLIENT_ID || "your-client-id",
+  clientSecret: process.env.OIDC_CLIENT_SECRET || "your-client-secret",
+  discoveryEndpoint: process.env.OIDC_DISCOVERY_ENDPOINT || "https://your-provider/.well-known/openid_configuration",
+  redirectUri: process.env.OIDC_REDIRECT_URI || "http://localhost:3001/auth/callback",
+  scopes: ["openid", "profile", "email"],
+};
+
+// Global OIDC configuration and MCP OAuth provider (initialized on server startup)
+let oidcConfig: Configuration | null = null;
+let oauthProvider: MCPOAuthProvider | null = null;
 
 const server = new McpServer({
   name: "Woody's Wild Guess - LIRR Estimator",
@@ -28,7 +46,37 @@ const server = new McpServer({
 // The ui:// scheme tells hosts this is an MCP App resource.
 const resourceUri = "ui://woodys-wild-guess/mcp-app.html";
 
-// Register the LIRR estimator tool
+// Initialize OIDC Configuration and MCP OAuth Provider
+async function initializeOIDCClient() {
+  try {
+    console.log("Initializing OIDC configuration...");
+    oidcConfig = await discovery(
+      new URL(OIDC_CONFIG.discoveryEndpoint),
+      OIDC_CONFIG.clientId,
+      OIDC_CONFIG.clientSecret
+    );
+
+    // Create the MCP OAuth provider that bridges VS Code <-> OIDC IdP
+    oauthProvider = new MCPOAuthProvider(
+      oidcConfig,
+      OIDC_CONFIG.redirectUri,
+      OIDC_CONFIG.scopes
+    );
+
+    // Mount MCP auth routes now that the provider is ready
+    // This handles: /authorize, /token, /register, /.well-known/oauth-authorization-server
+    expressApp.use(mcpAuthRouter({
+      provider: oauthProvider,
+      issuerUrl: new URL(`http://localhost:${PORT}`),
+    }));
+
+    console.log("OIDC configuration and MCP OAuth provider initialized successfully");
+  } catch (error) {
+    console.error("Failed to initialize OIDC configuration:", error);
+  }
+}
+
+// Register the LIRR estimator tool (auth is now handled at the transport layer)
 registerAppTool(
   server,
   "lirr-estimator",
@@ -91,127 +139,42 @@ const expressApp = express();
 expressApp.use(cors());
 expressApp.use(express.json());
 
-// DaVinci SDK token endpoint - securely fetches token using API key
-// Returns token + apiRoot for the widget to use
-expressApp.post("/dvtoken", async (req, res) => {
+// OIDC Callback endpoint - handles the redirect back from the OIDC IdP.
+// The MCP OAuth provider exchanges the OIDC code for tokens, generates its own
+// authorization code, and redirects back to VS Code's callback URL.
+expressApp.get("/auth/callback", async (req, res) => {
   try {
-    const policyId = req.body?.policyId || DAVINCI_CONFIG.policyId;
+    const { code, state } = req.query as { code?: string; state?: string };
 
-    const body: Record<string, unknown> = { policyId };
-
-    // Include flow parameters if provided
-    if (req.body?.flowParameters) {
-      body.parameters = req.body.flowParameters;
-    }
-
-    const response = await fetch(
-      `https://orchestrate-api.pingone.com/v1/company/${DAVINCI_CONFIG.companyId}/sdktoken`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-SK-API-KEY": DAVINCI_CONFIG.apiKey,
-        },
-        body: JSON.stringify(body),
-      }
-    );
-
-    const data = await response.json();
-
-    if (!data.success) {
-      console.error("Failed to get SDK token:", data);
-      res.status(500).json({ error: "Failed to get SDK token", details: data });
+    if (!code || !state) {
+      res.status(400).send("Missing authorization code or state");
       return;
     }
 
-    // Return token and apiRoot like BXIndustry does
-    res.json({
-      token: data.access_token,
-      companyId: DAVINCI_CONFIG.companyId,
-      apiRoot: "https://auth.pingone.com/",
-    });
-  } catch (err) {
-    console.error("SDK token error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    if (!oauthProvider) {
+      res.status(500).send("OAuth provider not initialized");
+      return;
+    }
+
+    // Let the provider handle the OIDC token exchange and generate our auth code
+    const result = await oauthProvider.handleOIDCCallback(code, state);
+
+    // Redirect back to VS Code's callback URL with our authorization code
+    const redirectUrl = new URL(result.redirectUri);
+    redirectUrl.searchParams.set("code", result.authCode);
+    if (result.state) {
+      redirectUrl.searchParams.set("state", result.state);
+    }
+
+    console.log("MCP OAuth: redirecting back to client:", redirectUrl.origin);
+    res.redirect(redirectUrl.toString());
+  } catch (error) {
+    console.error("OIDC callback error:", error);
+    res.status(500).send(`Authentication failed: ${(error as Error).message}`);
   }
 });
 
-// DaVinci API proxy - proxies all DaVinci/PingOne API requests to bypass CORS
-// Handles /auth/*, /v1/*, /davinci/*, and other PingOne SDK paths
-expressApp.all(["/auth/*", "/v1/*", "/davinci/*"], async (req, res) => {
-  try {
-    // Forward the path to PingOne's API (add /v1 prefix for /auth paths)
-    const targetPath = req.path.startsWith("/auth/") ? `/v1${req.path}` : req.path;
-    const targetUrl = `https://orchestrate-api.pingone.com${targetPath}`;
-
-    console.log(`Proxying ${req.method} ${targetUrl}`);
-
-    // Forward the request headers (excluding browser/host-specific ones)
-    const headers: Record<string, string> = {};
-    const skipHeaders = [
-      "host", "connection", "content-length", "accept-encoding",
-      "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
-      "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"
-    ];
-    // Note: Keep 'origin' and 'referer' - PingOne may need them for validation
-
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (!skipHeaders.includes(key.toLowerCase()) && typeof value === "string") {
-        headers[key] = value;
-      }
-    }
-
-    // Ensure content-type is set
-    if (!headers["content-type"]) {
-      headers["content-type"] = "application/json";
-    }
-
-    // Debug: log headers being sent
-    console.log("Forwarding headers:", JSON.stringify(headers, null, 2));
-
-    const fetchOptions: RequestInit = {
-      method: req.method,
-      headers,
-    };
-
-    // Include body for POST/PUT/PATCH requests
-    if (["POST", "PUT", "PATCH"].includes(req.method) && req.body) {
-      fetchOptions.body = JSON.stringify(req.body);
-    }
-
-    const response = await fetch(targetUrl, fetchOptions);
-
-    // Forward response status and headers
-    res.status(response.status);
-
-    // Forward relevant response headers
-    const contentType = response.headers.get("content-type");
-    if (contentType) {
-      res.setHeader("Content-Type", contentType);
-    }
-
-    // Return the response body
-    const data = await response.text();
-    res.send(data);
-  } catch (err) {
-    console.error("DaVinci proxy error:", err);
-    res.status(500).json({ error: "Proxy error" });
-  }
-});
-
-// Proxy the DaVinci SDK - allows loading via fetch+eval in sandboxed iframes
-expressApp.get("/davinci-sdk.js", async (_req, res) => {
-  try {
-    const sdkResponse = await fetch("https://assets.pingone.com/davinci/latest/davinci.js");
-    const sdkCode = await sdkResponse.text();
-    res.type("application/javascript").send(sdkCode);
-  } catch (err) {
-    console.error("Failed to fetch DaVinci SDK:", err);
-    res.status(500).send("// Failed to load DaVinci SDK");
-  }
-});
-
-// Auth status endpoint - check if user is authenticated (server-side session)
+// Auth status endpoint - check if user is authenticated (for browser-based app)
 expressApp.get("/auth/status", async (_req, res) => {
   const session = await getSession();
   res.json({
@@ -220,7 +183,7 @@ expressApp.get("/auth/status", async (_req, res) => {
   });
 });
 
-// Auth save endpoint - save auth data after DaVinci login completes
+// Auth save endpoint - save auth data after DaVinci login completes (for browser-based app)
 expressApp.post("/auth/save", async (req, res) => {
   try {
     const { accessToken, idToken } = req.body;
@@ -277,6 +240,120 @@ expressApp.post("/auth/logout", async (_req, res) => {
   res.json({ success: true });
 });
 
+// DaVinci SDK token endpoint - securely fetches token using API key
+// Returns token + apiRoot for the widget to use
+expressApp.post("/dvtoken", async (req, res) => {
+  try {
+    const policyId = req.body?.policyId || DAVINCI_CONFIG.policyId;
+
+    const body: Record<string, unknown> = { policyId };
+
+    // Include flow parameters if provided
+    if (req.body?.flowParameters) {
+      body.parameters = req.body.flowParameters;
+    }
+
+    const response = await fetch(
+      `https://orchestrate-api.pingone.com/v1/company/${DAVINCI_CONFIG.companyId}/sdktoken`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-SK-API-KEY": DAVINCI_CONFIG.apiKey,
+        },
+        body: JSON.stringify(body),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!data.success) {
+      console.error("Failed to get SDK token:", data);
+      res.status(500).json({ error: "Failed to get SDK token", details: data });
+      return;
+    }
+
+    // Return token and apiRoot like BXIndustry does
+    res.json({
+      token: data.access_token,
+      companyId: DAVINCI_CONFIG.companyId,
+      apiRoot: "https://auth.pingone.com/",
+    });
+  } catch (err) {
+    console.error("SDK token error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DaVinci API proxy - proxies all DaVinci/PingOne API requests to bypass CORS
+// Handles /v1/*, /davinci/*, and other PingOne SDK paths
+expressApp.all(["/v1/*", "/davinci/*"], async (req, res) => {
+  try {
+    const targetUrl = `https://orchestrate-api.pingone.com${req.path}`;
+
+    console.log(`Proxying ${req.method} ${targetUrl}`);
+
+    // Forward the request headers (excluding browser/host-specific ones)
+    const headers: Record<string, string> = {};
+    const skipHeaders = [
+      "host", "connection", "content-length", "accept-encoding",
+      "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
+      "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"
+    ];
+
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (!skipHeaders.includes(key.toLowerCase()) && typeof value === "string") {
+        headers[key] = value;
+      }
+    }
+
+    // Ensure content-type is set
+    if (!headers["content-type"]) {
+      headers["content-type"] = "application/json";
+    }
+
+    const fetchOptions: RequestInit = {
+      method: req.method,
+      headers,
+    };
+
+    // Include body for POST/PUT/PATCH requests
+    if (["POST", "PUT", "PATCH"].includes(req.method) && req.body) {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
+
+    // Forward response status and headers
+    res.status(response.status);
+
+    // Forward relevant response headers
+    const contentType = response.headers.get("content-type");
+    if (contentType) {
+      res.setHeader("Content-Type", contentType);
+    }
+
+    // Return the response body
+    const data = await response.text();
+    res.send(data);
+  } catch (err) {
+    console.error("DaVinci proxy error:", err);
+    res.status(500).json({ error: "Proxy error" });
+  }
+});
+
+// Proxy the DaVinci SDK - allows loading via fetch+eval in sandboxed iframes
+expressApp.get("/davinci-sdk.js", async (_req, res) => {
+  try {
+    const sdkResponse = await fetch("https://assets.pingone.com/davinci/latest/davinci.js");
+    const sdkCode = await sdkResponse.text();
+    res.type("application/javascript").send(sdkCode);
+  } catch (err) {
+    console.error("Failed to fetch DaVinci SDK:", err);
+    res.status(500).send("// Failed to load DaVinci SDK");
+  }
+});
+
 // Serve the app HTML for browser access (for auth flow testing)
 expressApp.get("/", async (_req, res) => {
   try {
@@ -290,7 +367,27 @@ expressApp.get("/", async (_req, res) => {
   }
 });
 
+// MCP endpoint - protected by Bearer token auth (standard MCP OAuth flow)
 expressApp.post("/mcp", async (req, res) => {
+  // If the OAuth provider is ready, require a Bearer token
+  if (oauthProvider) {
+    const authMiddleware = requireBearerAuth({ verifier: oauthProvider });
+    authMiddleware(req, res, async () => {
+      // Auth passed - process the MCP request
+      console.log("MCP request authenticated, processing...");
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+      res.on("close", () => transport.close());
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    });
+    return;
+  }
+
+  // Fallback: if OIDC not initialized, process without auth
+  console.warn("OAuth provider not initialized, processing MCP request without auth");
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -301,12 +398,17 @@ expressApp.post("/mcp", async (req, res) => {
 });
 
 const PORT = 3001;
-expressApp.listen(PORT, (err?: Error) => {
+expressApp.listen(PORT, async (err?: Error) => {
   if (err) {
     console.error("Error starting server:", err);
     process.exit(1);
   }
+
+  // Initialize OIDC client and MCP OAuth provider after server starts
+  await initializeOIDCClient();
+
   console.log(`Server listening on http://localhost:${PORT}`);
   console.log(`  - Browser: http://localhost:${PORT}/`);
   console.log(`  - MCP endpoint: http://localhost:${PORT}/mcp`);
+  console.log(`  - OAuth metadata: http://localhost:${PORT}/.well-known/oauth-authorization-server`);
 });
