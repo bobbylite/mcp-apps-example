@@ -76,10 +76,125 @@ registerAppResource(
   }
 );
 
+// DaVinci configuration (API key kept server-side for security)
+const DAVINCI_CONFIG = {
+  companyId: "5ba551c1-a8e9-45c7-a75e-2893f8761cee",
+  policyId: "4d8c0d254050175a84014620e0ce789e",
+  apiKey: "435dcb31c41a196c75d8e3f4314385d07b677a5dca9e4848b70bdf687e989208c091114dc6ccb797f3241d6014cc8f013d91291fa60d56596e33cbfff2b26a18fb9cd5ad42fadc6570b6dd1dd64bdc2b5ca2534e9e89a85d3590a39518209a0abf09e35a7abda3870248499edebe56d8e758d52da11b142282b6c14973890f4f",
+};
+
 // Expose the MCP server over HTTP
 const expressApp = express();
 expressApp.use(cors());
 expressApp.use(express.json());
+
+// DaVinci SDK token endpoint - securely fetches token using API key
+// Returns token + apiRoot for the widget to use
+expressApp.post("/dvtoken", async (req, res) => {
+  try {
+    const policyId = req.body?.policyId || DAVINCI_CONFIG.policyId;
+
+    const body: Record<string, unknown> = { policyId };
+
+    // Include flow parameters if provided
+    if (req.body?.flowParameters) {
+      body.parameters = req.body.flowParameters;
+    }
+
+    const response = await fetch(
+      `https://orchestrate-api.pingone.com/v1/company/${DAVINCI_CONFIG.companyId}/sdktoken`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-SK-API-KEY": DAVINCI_CONFIG.apiKey,
+        },
+        body: JSON.stringify(body),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!data.success) {
+      console.error("Failed to get SDK token:", data);
+      res.status(500).json({ error: "Failed to get SDK token", details: data });
+      return;
+    }
+
+    // Return token and apiRoot like BXIndustry does
+    res.json({
+      token: data.access_token,
+      companyId: DAVINCI_CONFIG.companyId,
+      apiRoot: "https://auth.pingone.com/",
+    });
+  } catch (err) {
+    console.error("SDK token error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DaVinci API proxy - proxies all DaVinci/PingOne API requests to bypass CORS
+// Handles /auth/*, /v1/*, /davinci/*, and other PingOne SDK paths
+expressApp.all(["/auth/*", "/v1/*", "/davinci/*"], async (req, res) => {
+  try {
+    // Forward the path to PingOne's API (add /v1 prefix for /auth paths)
+    const targetPath = req.path.startsWith("/auth/") ? `/v1${req.path}` : req.path;
+    const targetUrl = `https://orchestrate-api.pingone.com${targetPath}`;
+
+    console.log(`Proxying ${req.method} ${targetUrl}`);
+
+    // Forward the request headers (excluding browser/host-specific ones)
+    const headers: Record<string, string> = {};
+    const skipHeaders = [
+      "host", "connection", "content-length", "accept-encoding",
+      "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
+      "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"
+    ];
+    // Note: Keep 'origin' and 'referer' - PingOne may need them for validation
+
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (!skipHeaders.includes(key.toLowerCase()) && typeof value === "string") {
+        headers[key] = value;
+      }
+    }
+
+    // Ensure content-type is set
+    if (!headers["content-type"]) {
+      headers["content-type"] = "application/json";
+    }
+
+    // Debug: log headers being sent
+    console.log("Forwarding headers:", JSON.stringify(headers, null, 2));
+
+    const fetchOptions: RequestInit = {
+      method: req.method,
+      headers,
+    };
+
+    // Include body for POST/PUT/PATCH requests
+    if (["POST", "PUT", "PATCH"].includes(req.method) && req.body) {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
+
+    // Forward response status and headers
+    res.status(response.status);
+
+    // Forward relevant response headers
+    const contentType = response.headers.get("content-type");
+    if (contentType) {
+      res.setHeader("Content-Type", contentType);
+    }
+
+    // Return the response body
+    const data = await response.text();
+    res.send(data);
+  } catch (err) {
+    console.error("DaVinci proxy error:", err);
+    res.status(500).json({ error: "Proxy error" });
+  }
+});
 
 // Serve the app HTML for browser access (for auth flow testing)
 expressApp.get("/", async (_req, res) => {

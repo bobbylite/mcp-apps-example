@@ -1,14 +1,14 @@
 // src/auth.ts - PKCE Authentication Module for PingOne OIDC
 
 const AUTH_CONFIG = {
-  clientId: "...",
+  clientId: "6a74a87c-54fb-49d5-9c44-1c24c6648c09",
   authorizationEndpoint:
     "https://auth.pingone.com/5ba551c1-a8e9-45c7-a75e-2893f8761cee/as/authorize",
   tokenEndpoint:
     "https://auth.pingone.com/5ba551c1-a8e9-45c7-a75e-2893f8761cee/as/token",
   endSessionEndpoint:
     "https://auth.pingone.com/5ba551c1-a8e9-45c7-a75e-2893f8761cee/as/signoff",
-  redirectUri: "http://localhost:3001",
+  redirectUri: "http://127.0.0.1:3001",
   scope: "openid profile email",
 };
 

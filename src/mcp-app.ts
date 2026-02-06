@@ -10,13 +10,41 @@ import {
 } from "./lirr-projects";
 import woodyLogoUrl from "./assets/woody-logo.png";
 import {
-  login,
   logout,
   isAuthenticated,
-  hasAuthCallback,
-  handleCallback,
   getUser,
 } from "./auth";
+
+// DaVinci SDK global type
+declare const davinci: {
+  skRenderScreen: (
+    container: HTMLElement,
+    props: {
+      config: {
+        method: string;
+        apiRoot: string;
+        accessToken: string;
+        companyId: string;
+        policyId: string;
+      };
+      useModal?: boolean;
+      successCallback: (response: DaVinciResponse) => void;
+      errorCallback: (error: Error) => void;
+    }
+  ) => void;
+};
+
+interface DaVinciResponse {
+  access_token?: string;
+  id_token?: string;
+  additionalProperties?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+// DaVinci configuration (public values only - API key is server-side)
+const DAVINCI_CONFIG = {
+  policyId: "4d8c0d254050175a84014620e0ce789e",
+};
 
 // Auth DOM elements
 const loginScreen = document.getElementById("loginScreen") as HTMLDivElement;
@@ -425,6 +453,122 @@ async function initializeMainApp() {
   showAppScreen();
 }
 
+// Token response from server
+interface DvTokenResponse {
+  token: string;
+  companyId: string;
+  apiRoot: string;
+}
+
+// Server URL for API requests (absolute URL needed for iframe context)
+const SERVER_URL = "http://127.0.0.1:3001";
+
+// Fetch DaVinci token from our server (includes apiRoot)
+async function fetchDvToken(): Promise<DvTokenResponse> {
+  const response = await fetch(`${SERVER_URL}/dvtoken`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ policyId: DAVINCI_CONFIG.policyId }),
+  });
+  if (!response.ok) {
+    throw new Error("Failed to fetch DaVinci token");
+  }
+  return response.json();
+}
+
+// Store auth data from DaVinci response
+function storeAuthData(response: DaVinciResponse): void {
+  if (response.access_token) {
+    sessionStorage.setItem("auth_access_token", response.access_token);
+  }
+  if (response.id_token) {
+    sessionStorage.setItem("auth_id_token", response.id_token);
+    // Parse user info from ID token
+    try {
+      const parts = response.id_token.split(".");
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+        sessionStorage.setItem("auth_user", JSON.stringify({
+          sub: payload.sub,
+          name: payload.name,
+          email: payload.email,
+          given_name: payload.given_name,
+          family_name: payload.family_name,
+        }));
+      }
+    } catch (e) {
+      console.error("Failed to parse ID token:", e);
+    }
+  }
+}
+
+// Wait for DaVinci SDK to load
+function waitForDaVinci(timeout = 5000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (typeof davinci !== "undefined") {
+      resolve();
+      return;
+    }
+
+    const startTime = Date.now();
+    const checkInterval = setInterval(() => {
+      if (typeof davinci !== "undefined") {
+        clearInterval(checkInterval);
+        resolve();
+      } else if (Date.now() - startTime > timeout) {
+        clearInterval(checkInterval);
+        reject(new Error("DaVinci SDK failed to load"));
+      }
+    }, 100);
+  });
+}
+
+// Initialize DaVinci widget
+async function initializeDaVinciWidget(): Promise<void> {
+  const widgetContainer = document.getElementById("davinci-widget");
+  if (!widgetContainer) {
+    console.error("DaVinci widget container not found");
+    return;
+  }
+
+  try {
+    // Wait for DaVinci SDK to be available
+    await waitForDaVinci();
+    console.log("DaVinci SDK loaded");
+
+    // Fetch token and apiRoot from server
+    const tokenData = await fetchDvToken();
+    console.log("DaVinci token fetched");
+
+    davinci.skRenderScreen(widgetContainer, {
+      config: {
+        method: "runFlow",
+        apiRoot: tokenData.apiRoot,
+        accessToken: tokenData.token,
+        companyId: tokenData.companyId,
+        policyId: DAVINCI_CONFIG.policyId,
+      },
+      useModal: false,
+      successCallback: async (response: DaVinciResponse) => {
+        console.log("DaVinci auth success:", response);
+        storeAuthData(response);
+        await initializeMainApp();
+      },
+      errorCallback: (error: Error) => {
+        console.error("DaVinci auth error:", error);
+        // Show fallback login button
+        loginBtn.classList.remove("hidden");
+        widgetContainer.innerHTML = "<p style='color: #991b1b; margin-bottom: 16px;'>Authentication widget failed to load.</p>";
+      },
+    });
+  } catch (err) {
+    console.error("Failed to initialize DaVinci widget:", err);
+    // Show fallback login button
+    loginBtn.classList.remove("hidden");
+    widgetContainer.innerHTML = "<p style='color: #991b1b; margin-bottom: 16px;'>Authentication widget failed to load.</p>";
+  }
+}
+
 // Initialize auth flow
 async function initialize() {
   // Set Woody logo on login screen
@@ -432,29 +576,12 @@ async function initialize() {
     loginWoodyLogo.src = woodyLogoUrl;
   }
 
-  // Wire up login button
-  loginBtn.addEventListener("click", () => {
-    loginBtn.disabled = true;
-    loginBtn.textContent = "Redirecting...";
-    login();
-  });
-
   // Wire up logout button
   logoutBtn.addEventListener("click", () => {
     logout();
   });
 
-  // Check if this is an auth callback
-  if (hasAuthCallback()) {
-    showLoadingScreen();
-    const success = await handleCallback();
-    if (success) {
-      await initializeMainApp();
-    } else {
-      showLoginScreen();
-    }
-    return;
-  }
+  // Note: We no longer skip auth in MCP host - DaVinci widget works in iframes
 
   // Check if already authenticated
   if (isAuthenticated()) {
@@ -463,8 +590,9 @@ async function initialize() {
     return;
   }
 
-  // Show login screen
+  // Show login screen with DaVinci widget
   showLoginScreen();
+  await initializeDaVinciWidget();
 }
 
 initialize().catch((err) => {
