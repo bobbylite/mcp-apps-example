@@ -607,6 +607,20 @@
       .hidden {
         display: none !important;
       }
+
+      /* DaVinci Widget Container */
+      #davinci-widget {
+        min-height: 200px;
+        width: 100%;
+      }
+
+      #davinci-widget:empty::after {
+        content: "Loading...";
+        display: block;
+        text-align: center;
+        color: #6b7280;
+        padding: 20px;
+      }
     </style>
   </head>
   <body>
@@ -629,7 +643,10 @@
       </div>
       <h1>Woody's Wild Guess</h1>
       <p>Sign in to access the LIRR Capital Project Estimator</p>
-      <button class="login-btn" id="loginBtn">Sign in with PingOne</button>
+      <!-- DaVinci widget container -->
+      <div id="davinci-widget"></div>
+      <!-- Fallback button (hidden when widget loads) -->
+      <button class="login-btn hidden" id="loginBtn">Sign in with PingOne</button>
     </div>
 
     <!-- Loading Screen -->
@@ -760,6 +777,8 @@
 
     <div class="toast" id="toast">Estimate sent!</div>
 
+    <!-- DaVinci SDK -->
+    <script src="https://assets.pingone.com/davinci/latest/davinci.js"></script>
     <script type="module" src="/src/mcp-app.ts"></script>
   </body>
 </html>
