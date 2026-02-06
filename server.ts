@@ -391,26 +391,21 @@ expressApp.post("/mcp", async (req, res) => {
     return;
   }
 
-  // Fallback: if OIDC not initialized, process without auth
-  console.warn("OAuth provider not initialized, processing MCP request without auth");
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  res.on("close", () => transport.close());
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  // OIDC not initialized yet - reject requests until auth is ready
+  console.warn("OAuth provider not initialized, rejecting MCP request");
+  res.status(503).json({ error: "Authentication provider not ready. Please try again shortly." });
 });
 
 const PORT = 3001;
-expressApp.listen(PORT, async (err?: Error) => {
+
+// Initialize OIDC before starting the server so auth is ready for the first request
+await initializeOIDCClient();
+
+expressApp.listen(PORT, (err?: Error) => {
   if (err) {
     console.error("Error starting server:", err);
     process.exit(1);
   }
-
-  // Initialize OIDC client and MCP OAuth provider after server starts
-  await initializeOIDCClient();
 
   console.log(`Server listening on http://localhost:${PORT}`);
   console.log(`  - Browser: http://localhost:${PORT}/`);
