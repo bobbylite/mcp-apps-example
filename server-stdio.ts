@@ -9,9 +9,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getSession } from "./src/session-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
+
+// Login URL for browser authentication
+const LOGIN_URL = "http://127.0.0.1:3001";
 
 // Create a new MCP server instance
 const server = new McpServer({
@@ -34,11 +38,28 @@ registerAppTool(
     _meta: { ui: { resourceUri } },
   },
   async () => {
+    // Check if user is authenticated
+    const session = await getSession();
+
+    if (!session.authenticated) {
+      // Not authenticated - prompt user to login in browser
+      return {
+        content: [
+          {
+            type: "text",
+            text: `🔐 Authentication Required\n\nPlease login first by opening this URL in your browser:\n${LOGIN_URL}\n\nAfter completing login, invoke this tool again.`,
+          },
+        ],
+      };
+    }
+
+    // Authenticated - return success message
+    const userName = session.user?.name || session.user?.given_name || "User";
     return {
       content: [
         {
           type: "text",
-          text: "Woody's Wild Guess initialized. Browse LIRR capital projects and get Woody's estimates!",
+          text: `Welcome back, ${userName}! Woody's Wild Guess is ready. Browse LIRR capital projects and get Woody's estimates!`,
         },
       ],
     };

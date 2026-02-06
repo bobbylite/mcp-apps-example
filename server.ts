@@ -8,10 +8,17 @@ import {
   registerAppResource,
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
+import { z } from "zod";
 import cors from "cors";
 import express from "express";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  getSession,
+  saveSession,
+  clearSession,
+  type AuthSession,
+} from "./src/session-store.js";
 
 const server = new McpServer({
   name: "Woody's Wild Guess - LIRR Estimator",
@@ -30,20 +37,16 @@ registerAppTool(
     description:
       "Opens Woody's Wild Guess, an interactive LIRR capital project estimator. Browse real MTA capital program projects, get cost estimates, and learn about Long Island Rail Road infrastructure investments. Optionally provide a project name or category to search.",
     inputSchema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description:
-            "Optional search query to filter projects (e.g., 'Grand Central', 'electrification', 'accessibility')",
-        },
-      },
-      additionalProperties: false,
-    } as const,
+      query: z
+        .string()
+        .describe(
+          "Optional search query to filter projects (e.g., 'Grand Central', 'electrification', 'accessibility')"
+        )
+        .optional(),
+    },
     _meta: { ui: { resourceUri } },
   },
-  async (args: Record<string, unknown>) => {
-    const query = (args.query as string) || "";
+  async ({ query }) => {
     return {
       content: [
         {
@@ -194,6 +197,84 @@ expressApp.all(["/auth/*", "/v1/*", "/davinci/*"], async (req, res) => {
     console.error("DaVinci proxy error:", err);
     res.status(500).json({ error: "Proxy error" });
   }
+});
+
+// Proxy the DaVinci SDK - allows loading via fetch+eval in sandboxed iframes
+expressApp.get("/davinci-sdk.js", async (_req, res) => {
+  try {
+    const sdkResponse = await fetch("https://assets.pingone.com/davinci/latest/davinci.js");
+    const sdkCode = await sdkResponse.text();
+    res.type("application/javascript").send(sdkCode);
+  } catch (err) {
+    console.error("Failed to fetch DaVinci SDK:", err);
+    res.status(500).send("// Failed to load DaVinci SDK");
+  }
+});
+
+// Auth status endpoint - check if user is authenticated (server-side session)
+expressApp.get("/auth/status", async (_req, res) => {
+  const session = await getSession();
+  res.json({
+    authenticated: session.authenticated,
+    user: session.user,
+  });
+});
+
+// Auth save endpoint - save auth data after DaVinci login completes
+expressApp.post("/auth/save", async (req, res) => {
+  try {
+    const { accessToken, idToken } = req.body;
+
+    if (!accessToken) {
+      res.status(400).json({ error: "Missing access token" });
+      return;
+    }
+
+    // Parse user info from ID token if provided
+    let user: AuthSession["user"];
+    if (idToken) {
+      try {
+        const parts = idToken.split(".");
+        if (parts.length === 3) {
+          const payload = JSON.parse(
+            Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString()
+          );
+          user = {
+            sub: payload.sub,
+            name: payload.name,
+            email: payload.email,
+            given_name: payload.given_name,
+            family_name: payload.family_name,
+          };
+        }
+      } catch (e) {
+        console.error("Failed to parse ID token:", e);
+      }
+    }
+
+    // Save session with 24-hour expiry
+    const session: AuthSession = {
+      authenticated: true,
+      accessToken,
+      idToken,
+      user,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+    };
+    await saveSession(session);
+
+    console.log("Auth session saved for user:", user?.name || user?.email || "unknown");
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error("Failed to save auth session:", err);
+    res.status(500).json({ error: "Failed to save session" });
+  }
+});
+
+// Auth logout endpoint - clear the session
+expressApp.post("/auth/logout", async (_req, res) => {
+  await clearSession();
+  console.log("Auth session cleared");
+  res.json({ success: true });
 });
 
 // Serve the app HTML for browser access (for auth flow testing)

@@ -476,7 +476,23 @@ async function fetchDvToken(): Promise<DvTokenResponse> {
   return response.json();
 }
 
-// Store auth data from DaVinci response
+// Save auth data to server (for MCP host to access)
+async function saveAuthToServer(response: DaVinciResponse): Promise<{ user?: { name?: string; email?: string } }> {
+  const result = await fetch(`${SERVER_URL}/auth/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      accessToken: response.access_token,
+      idToken: response.id_token,
+    }),
+  });
+  if (!result.ok) {
+    throw new Error("Failed to save auth to server");
+  }
+  return result.json();
+}
+
+// Store auth data from DaVinci response (local storage for browser)
 function storeAuthData(response: DaVinciResponse): void {
   if (response.access_token) {
     sessionStorage.setItem("auth_access_token", response.access_token);
@@ -502,25 +518,59 @@ function storeAuthData(response: DaVinciResponse): void {
   }
 }
 
-// Wait for DaVinci SDK to load
-function waitForDaVinci(timeout = 5000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (typeof davinci !== "undefined") {
-      resolve();
-      return;
-    }
+// Show success screen after login (for browser flow)
+function showSuccessScreen(userName?: string) {
+  // Hide all screens
+  loginScreen.classList.add("hidden");
+  loadingScreen.classList.add("hidden");
+  appContainer.classList.add("hidden");
 
-    const startTime = Date.now();
-    const checkInterval = setInterval(() => {
-      if (typeof davinci !== "undefined") {
-        clearInterval(checkInterval);
-        resolve();
-      } else if (Date.now() - startTime > timeout) {
-        clearInterval(checkInterval);
-        reject(new Error("DaVinci SDK failed to load"));
-      }
-    }, 100);
-  });
+  // Create and show success screen
+  const successScreen = document.createElement("div");
+  successScreen.className = "success-screen";
+  successScreen.innerHTML = `
+    <div style="text-align: center; padding: 40px; max-width: 400px; margin: 0 auto;">
+      <img src="${woodyLogoUrl}" alt="Woody's Wild Guess Logo" style="width: 120px; height: 120px; margin-bottom: 24px;">
+      <h2 style="color: #1e3a5f; margin-bottom: 16px;">Login Successful!</h2>
+      <p style="color: #4a5568; margin-bottom: 24px;">
+        Welcome${userName ? `, ${userName}` : ""}! You can now return to Claude Desktop and use Woody's Wild Guess.
+      </p>
+      <p style="color: #718096; font-size: 14px; margin-bottom: 24px;">
+        Invoke the <strong>lirr-estimator</strong> tool again to access the app.
+      </p>
+      <button id="continueInBrowser" class="primary-btn" style="width: 100%;">
+        Or Continue in Browser
+      </button>
+    </div>
+  `;
+  document.body.appendChild(successScreen);
+
+  // Wire up continue button
+  const continueBtn = document.getElementById("continueInBrowser");
+  if (continueBtn) {
+    continueBtn.addEventListener("click", () => {
+      successScreen.remove();
+      initializeMainApp();
+    });
+  }
+}
+
+// Load the DaVinci SDK via wrapper that sets window.davinci
+import { isDaVinciLoaded } from "./davinci-loader";
+
+// Wait for DaVinci SDK to be available
+async function loadDaVinciSDK(): Promise<void> {
+  // Check if already loaded
+  if (isDaVinciLoaded()) {
+    return;
+  }
+
+  // Give the script a moment to execute
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  if (!isDaVinciLoaded()) {
+    throw new Error("DaVinci SDK failed to initialize");
+  }
 }
 
 // Initialize DaVinci widget
@@ -533,7 +583,7 @@ async function initializeDaVinciWidget(): Promise<void> {
 
   try {
     // Wait for DaVinci SDK to be available
-    await waitForDaVinci();
+    await loadDaVinciSDK();
     console.log("DaVinci SDK loaded");
 
     // Fetch token and apiRoot from server
@@ -552,7 +602,18 @@ async function initializeDaVinciWidget(): Promise<void> {
       successCallback: async (response: DaVinciResponse) => {
         console.log("DaVinci auth success:", response);
         storeAuthData(response);
-        await initializeMainApp();
+
+        // Save auth to server so MCP host (Claude Desktop) can access it
+        try {
+          const result = await saveAuthToServer(response);
+          console.log("Auth saved to server:", result);
+          // Show success screen with option to return to Claude Desktop
+          showSuccessScreen(result.user?.name || result.user?.email);
+        } catch (err) {
+          console.error("Failed to save auth to server:", err);
+          // Still show the app even if server save fails
+          await initializeMainApp();
+        }
       },
       errorCallback: (error: Error) => {
         console.error("DaVinci auth error:", error);
@@ -569,6 +630,21 @@ async function initializeDaVinciWidget(): Promise<void> {
   }
 }
 
+// Detect if we're in an MCP host (sandboxed iframe that blocks network requests)
+function isInMcpHost(): boolean {
+  try {
+    // Check if we're in an iframe
+    if (window.self !== window.top) {
+      return true;
+    }
+    // Check if MCP App SDK is available and we can connect
+    return false;
+  } catch {
+    // Cross-origin iframe - definitely in a sandboxed context
+    return true;
+  }
+}
+
 // Initialize auth flow
 async function initialize() {
   // Set Woody logo on login screen
@@ -577,11 +653,24 @@ async function initialize() {
   }
 
   // Wire up logout button
-  logoutBtn.addEventListener("click", () => {
+  logoutBtn.addEventListener("click", async () => {
+    // Clear server-side session too
+    try {
+      await fetch(`${SERVER_URL}/auth/logout`, { method: "POST" });
+    } catch (e) {
+      console.error("Failed to logout from server:", e);
+    }
     logout();
   });
 
-  // Note: We no longer skip auth in MCP host - DaVinci widget works in iframes
+  // In MCP host (Claude Desktop), skip auth since network requests are blocked
+  // The iframe sandbox prevents fetch calls to our server
+  if (isInMcpHost()) {
+    console.log("Running in MCP host - skipping authentication");
+    showLoadingScreen();
+    await initializeMainApp();
+    return;
+  }
 
   // Check if already authenticated
   if (isAuthenticated()) {
