@@ -17,6 +17,7 @@ import {
   calculatePKCECodeChallenge,
   type Configuration,
 } from "openid-client";
+import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 
 // Pending authorization request from VS Code, keyed by the OIDC state parameter
 interface PendingAuthRequest {
@@ -269,11 +270,11 @@ export class MCPOAuthProvider implements OAuthServerProvider {
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const data = this.accessTokens.get(token);
     if (!data) {
-      throw new Error("Invalid or unknown token");
+      throw new InvalidTokenError("Invalid or unknown token");
     }
     if (data.expiresAt < Date.now()) {
       this.accessTokens.delete(token);
-      throw new Error("Token has expired");
+      throw new InvalidTokenError("Token has expired");
     }
 
     return {

@@ -15,7 +15,7 @@ import express from "express";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { discovery, type Configuration } from "openid-client";
-import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { MCPOAuthProvider } from "./src/mcp-oauth-provider.js";
 import {
@@ -68,6 +68,7 @@ async function initializeOIDCClient() {
     expressApp.use(mcpAuthRouter({
       provider: oauthProvider,
       issuerUrl: new URL(`http://localhost:${PORT}`),
+      resourceServerUrl: new URL(`http://localhost:${PORT}/mcp`),
     }));
 
     console.log("OIDC configuration and MCP OAuth provider initialized successfully");
@@ -371,7 +372,11 @@ expressApp.get("/", async (_req, res) => {
 expressApp.post("/mcp", async (req, res) => {
   // If the OAuth provider is ready, require a Bearer token
   if (oauthProvider) {
-    const authMiddleware = requireBearerAuth({ verifier: oauthProvider });
+    const mcpServerUrl = new URL(`http://localhost:${PORT}/mcp`);
+    const authMiddleware = requireBearerAuth({
+      verifier: oauthProvider,
+      resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpServerUrl),
+    });
     authMiddleware(req, res, async () => {
       // Auth passed - process the MCP request
       console.log("MCP request authenticated, processing...");
